@@ -14,11 +14,12 @@ import (
 type Model struct {
 	KeyMap KeyMap
 
-	cols   []Column
-	rows   []Row
-	cursor int
-	focus  bool
-	styles Styles
+	cols     []Column
+	rows     []Row
+	cursor   int
+	focus    bool
+	styles   Styles
+	selected map[int]struct{}
 
 	viewport viewport.Model
 	start    int
@@ -37,14 +38,17 @@ type Column struct {
 // KeyMap defines keybindings. It satisfies to the help.KeyMap interface, which
 // is used to render the menu.
 type KeyMap struct {
-	LineUp       key.Binding
-	LineDown     key.Binding
-	PageUp       key.Binding
-	PageDown     key.Binding
-	HalfPageUp   key.Binding
-	HalfPageDown key.Binding
-	GotoTop      key.Binding
-	GotoBottom   key.Binding
+	LineUp          key.Binding
+	LineDown        key.Binding
+	PageUp          key.Binding
+	PageDown        key.Binding
+	HalfPageUp      key.Binding
+	HalfPageDown    key.Binding
+	GotoTop         key.Binding
+	GotoBottom      key.Binding
+	MultiSelectUp   key.Binding
+	MultiSelectDown key.Binding
+	Blur            key.Binding
 }
 
 // DefaultKeyMap returns a default set of keybindings.
@@ -83,6 +87,14 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("end", "G"),
 			key.WithHelp("G/end", "go to end"),
 		),
+		MultiSelectUp: key.NewBinding(
+			key.WithKeys("shift+up", "shift+k"),
+			key.WithHelp("shift+up/shift+k", "multi-select up"),
+		),
+		MultiSelectDown: key.NewBinding(
+			key.WithKeys("shift+down", "shift+j"),
+			key.WithHelp("shift+down/shift+j", "multi-select down"),
+		),
 	}
 }
 
@@ -92,6 +104,7 @@ type Styles struct {
 	Header   lipgloss.Style
 	Cell     lipgloss.Style
 	Selected lipgloss.Style
+	Cursor   lipgloss.Style
 }
 
 // DefaultStyles returns a set of default style definitions for this table.
@@ -100,6 +113,7 @@ func DefaultStyles() Styles {
 		Selected: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212")),
 		Header:   lipgloss.NewStyle().Bold(true).Padding(0, 1),
 		Cell:     lipgloss.NewStyle().Padding(0, 1),
+		Cursor:   lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212")),
 	}
 }
 
@@ -119,6 +133,7 @@ func New(opts ...Option) Model {
 	m := Model{
 		cursor:   0,
 		viewport: viewport.New(0, 20),
+		selected: map[int]struct{}{0: {}},
 
 		KeyMap: DefaultKeyMap(),
 		styles: DefaultStyles(),
@@ -192,23 +207,27 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch {
 		case key.Matches(msg, m.KeyMap.LineUp):
-			m.MoveUp(1)
+			m.MoveUp(1, false)
 		case key.Matches(msg, m.KeyMap.LineDown):
-			m.MoveDown(1)
+			m.MoveDown(1, false)
 		case key.Matches(msg, m.KeyMap.PageUp):
-			m.MoveUp(m.viewport.Height)
+			m.MoveUp(m.viewport.Height, false)
 		case key.Matches(msg, m.KeyMap.PageDown):
-			m.MoveDown(m.viewport.Height)
+			m.MoveDown(m.viewport.Height, false)
 		case key.Matches(msg, m.KeyMap.HalfPageUp):
-			m.MoveUp(m.viewport.Height / 2)
+			m.MoveUp(m.viewport.Height/2, false)
 		case key.Matches(msg, m.KeyMap.HalfPageDown):
-			m.MoveDown(m.viewport.Height / 2)
+			m.MoveDown(m.viewport.Height/2, false)
 		case key.Matches(msg, m.KeyMap.LineDown):
-			m.MoveDown(1)
+			m.MoveDown(1, false)
 		case key.Matches(msg, m.KeyMap.GotoTop):
 			m.GotoTop()
 		case key.Matches(msg, m.KeyMap.GotoBottom):
 			m.GotoBottom()
+		case key.Matches(msg, m.KeyMap.MultiSelectUp):
+			m.MoveUp(1, true)
+		case key.Matches(msg, m.KeyMap.MultiSelectDown):
+			m.MoveDown(1, true)
 		}
 	}
 
@@ -261,14 +280,14 @@ func (m *Model) UpdateViewport() {
 	)
 }
 
-// SelectedRow returns the selected row.
+// SelectedRows returns the selected rows.
 // You can cast it to your own implementation.
-func (m Model) SelectedRow() Row {
-	if m.cursor < 0 || m.cursor >= len(m.rows) {
-		return nil
+func (m Model) SelectedRows() []Row {
+	rows := make([]Row, 0, len(m.selected))
+	for k, _ := range m.selected {
+		rows = append(rows, m.rows[k])
 	}
-
-	return m.rows[m.cursor]
+	return rows
 }
 
 // Rows returns the current rows.
@@ -321,10 +340,50 @@ func (m *Model) SetCursor(n int) {
 	m.UpdateViewport()
 }
 
+func (m *Model) ClearSelected() {
+	for k := range m.selected {
+		delete(m.selected, k)
+	}
+}
+
+func (m *Model) manageSelected(n int, multi bool, down bool) {
+	// record existing cursor position
+	preCursor := m.cursor
+
+	// to make this method useable for both up and down movements
+	if down {
+		n = n * -1
+	}
+	m.cursor = clamp(m.cursor-n, 0, len(m.rows)-1)
+
+	if !multi {
+		m.ClearSelected()
+		m.selected[m.cursor] = struct{}{}
+		return
+	}
+
+	// if the cursor didn't move (e.g., at top of list),
+	// and we are multi-selecting, return early, its a noop
+	if m.cursor == preCursor {
+		return
+	}
+
+	// if the new cursor was already in the map, the user is actually de-selecting
+	// the prior extrema of the multi-select so we delete it from the map and return
+	_, ok := m.selected[m.cursor]
+	if ok {
+		delete(m.selected, preCursor)
+		return
+	}
+
+	// we are extending the multiselect
+	m.selected[m.cursor] = struct{}{}
+}
+
 // MoveUp moves the selection up by any number of rows.
 // It can not go above the first row.
-func (m *Model) MoveUp(n int) {
-	m.cursor = clamp(m.cursor-n, 0, len(m.rows)-1)
+func (m *Model) MoveUp(n int, multi bool) {
+	m.manageSelected(n, multi, false)
 	switch {
 	case m.start == 0:
 		m.viewport.SetYOffset(clamp(m.viewport.YOffset, 0, m.cursor))
@@ -338,9 +397,10 @@ func (m *Model) MoveUp(n int) {
 
 // MoveDown moves the selection down by any number of rows.
 // It can not go below the last row.
-func (m *Model) MoveDown(n int) {
-	m.cursor = clamp(m.cursor+n, 0, len(m.rows)-1)
-	m.UpdateViewport()
+func (m *Model) MoveDown(n int, multi bool) {
+	m.manageSelected(n, multi, true)
+
+	m.UpdateViewport() // I moved this lower in this function. it was placed after the clamp, which differed from MoveUp
 
 	switch {
 	case m.end == len(m.rows):
@@ -355,12 +415,12 @@ func (m *Model) MoveDown(n int) {
 
 // GotoTop moves the selection to the first row.
 func (m *Model) GotoTop() {
-	m.MoveUp(m.cursor)
+	m.MoveUp(m.cursor, false)
 }
 
 // GotoBottom moves the selection to the last row.
 func (m *Model) GotoBottom() {
-	m.MoveDown(len(m.rows))
+	m.MoveDown(len(m.rows), false)
 }
 
 // FromValues create the table rows from a simple string. It uses `\n` by
@@ -400,6 +460,11 @@ func (m *Model) renderRow(rowID int) string {
 	row := lipgloss.JoinHorizontal(lipgloss.Left, s...)
 
 	if rowID == m.cursor {
+		return m.styles.Cursor.Render(row)
+	}
+
+	_, ok := m.selected[rowID]
+	if ok {
 		return m.styles.Selected.Render(row)
 	}
 
