@@ -1,6 +1,7 @@
 package table
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -38,17 +39,19 @@ type Column struct {
 // KeyMap defines keybindings. It satisfies to the help.KeyMap interface, which
 // is used to render the menu.
 type KeyMap struct {
-	LineUp          key.Binding
-	LineDown        key.Binding
-	PageUp          key.Binding
-	PageDown        key.Binding
-	HalfPageUp      key.Binding
-	HalfPageDown    key.Binding
-	GotoTop         key.Binding
-	GotoBottom      key.Binding
-	MultiSelectUp   key.Binding
-	MultiSelectDown key.Binding
-	Blur            key.Binding
+	LineUp              key.Binding
+	LineDown            key.Binding
+	PageUp              key.Binding
+	PageDown            key.Binding
+	HalfPageUp          key.Binding
+	HalfPageDown        key.Binding
+	GotoTop             key.Binding
+	GotoBottom          key.Binding
+	MultiSelectUp       key.Binding
+	MultiSelectDown     key.Binding
+	MultiSelectToTop    key.Binding
+	MultiSelectToBottom key.Binding
+	Blur                key.Binding
 }
 
 // DefaultKeyMap returns a default set of keybindings.
@@ -94,6 +97,14 @@ func DefaultKeyMap() KeyMap {
 		MultiSelectDown: key.NewBinding(
 			key.WithKeys("shift+down", "shift+j"),
 			key.WithHelp("shift+down/shift+j", "multi-select down"),
+		),
+		MultiSelectToTop: key.NewBinding(
+			key.WithKeys("shift+home"),
+			key.WithHelp("ctrl+shift+up", "multi-select to top"),
+		),
+		MultiSelectToBottom: key.NewBinding(
+			key.WithKeys("shift+end"),
+			key.WithHelp("ctrl+shift+down", "multi-select to bottom"),
 		),
 	}
 }
@@ -228,6 +239,10 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.MoveUp(1, true)
 		case key.Matches(msg, m.KeyMap.MultiSelectDown):
 			m.MoveDown(1, true)
+		case key.Matches(msg, m.KeyMap.MultiSelectToTop):
+			m.MultiSelectToTop()
+		case key.Matches(msg, m.KeyMap.MultiSelectToBottom):
+			m.MultiSelectToBottom()
 		}
 	}
 
@@ -280,13 +295,13 @@ func (m *Model) UpdateViewport() {
 	)
 }
 
-// SelectedRows returns the selected rows.
-// You can cast it to your own implementation.
-func (m Model) SelectedRows() []Row {
-	rows := make([]Row, 0, len(m.selected))
+// SelectedRows returns the indexes of the selected rows.
+func (m Model) SelectedRows() []int {
+	rows := make([]int, 0, len(m.selected))
 	for k, _ := range m.selected {
-		rows = append(rows, m.rows[k])
+		rows = append(rows, k)
 	}
+	sort.Ints(rows)
 	return rows
 }
 
@@ -411,6 +426,24 @@ func (m *Model) MoveDown(n int, multi bool) {
 	case m.cursor > m.viewport.YOffset+m.viewport.Height-1:
 		m.viewport.SetYOffset(clamp(m.viewport.YOffset+1, 0, 1))
 	}
+}
+
+func (m *Model) MultiSelectToTop() {
+	for i := 0; i <= m.cursor; i++ {
+		m.selected[i] = struct{}{}
+	}
+	m.SetCursor(0)
+	m.viewport.SetYOffset(clamp(m.viewport.YOffset, 0, m.cursor))
+	m.UpdateViewport()
+}
+
+func (m *Model) MultiSelectToBottom() {
+	for i := m.cursor; i < len(m.rows); i++ {
+		m.selected[i] = struct{}{}
+	}
+	m.SetCursor(len(m.rows) - 1)
+	m.viewport.SetYOffset(clamp(m.viewport.YOffset+1, 0, 1))
+	m.UpdateViewport()
 }
 
 // GotoTop moves the selection to the first row.
