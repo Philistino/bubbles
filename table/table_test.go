@@ -78,7 +78,7 @@ func newTable() Model {
 		WithColumns(columns),
 		WithRows(rows),
 		WithFocused(true),
-		WithHeight(7),
+		WithHeight(3),
 	)
 	// t.SetStyles(s)
 	t.SetCursor(0)
@@ -149,6 +149,44 @@ func TestNav(t *testing.T) {
 					}),
 			},
 			wantSelected: []int{3, 4, 5, 6},
+		},
+		{
+			name: "multi-select back",
+			keyMsgs: []tea.KeyMsg{
+				tea.KeyMsg(
+					tea.Key{
+						Type: tea.KeyDown,
+					}),
+				tea.KeyMsg(
+					tea.Key{
+						Type: tea.KeyDown,
+					}),
+				tea.KeyMsg(
+					tea.Key{
+						Type: tea.KeyDown,
+					}),
+				tea.KeyMsg(
+					tea.Key{
+						Type: tea.KeyShiftDown,
+					}),
+				tea.KeyMsg(
+					tea.Key{
+						Type: tea.KeyShiftDown,
+					}),
+				tea.KeyMsg(
+					tea.Key{
+						Type: tea.KeyShiftUp,
+					}),
+				tea.KeyMsg(
+					tea.Key{
+						Type: tea.KeyShiftUp,
+					}),
+				tea.KeyMsg(
+					tea.Key{
+						Type: tea.KeyShiftUp,
+					}),
+			},
+			wantSelected: []int{2, 3},
 		},
 	}
 
