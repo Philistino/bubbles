@@ -1,6 +1,11 @@
 package table
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
+)
 
 func TestFromValues(t *testing.T) {
 	input := "foo1,bar1\nfoo2,bar2\nfoo3,bar3"
@@ -51,4 +56,112 @@ func deepEqual(a, b []Row) bool {
 		}
 	}
 	return true
+}
+
+func newTable() Model {
+	columns := []Column{
+		{Title: "Rank", Width: 4},
+		{Title: "City", Width: 10},
+		{Title: "Country", Width: 10},
+		{Title: "Population", Width: 10},
+	}
+	rows := []Row{
+		{"0", "London", "United Kingdom", "9,540,576"},
+		{"1", "Tokyo", "Japan", "37,274,000"},
+		{"2", "Delhi", "India", "32,065,760"},
+		{"3", "Shanghai", "China", "28,516,904"},
+		{"4", "Dhaka", "Bangladesh", "22,478,116"},
+		{"5", "São Paulo", "Brazil", "22,429,800"},
+		{"6", "Mexico City", "Mexico", "22,085,140"},
+	}
+	t := New(
+		WithColumns(columns),
+		WithRows(rows),
+		WithFocused(true),
+		WithHeight(7),
+	)
+	// t.SetStyles(s)
+	t.SetCursor(0)
+	return t
+}
+
+func TestNav(t *testing.T) {
+
+	testcases := []struct {
+		name         string
+		setCursor    int
+		keyMsgs      []tea.KeyMsg
+		wantSelected []int
+	}{
+		{
+			name: "down one",
+			keyMsgs: []tea.KeyMsg{tea.KeyMsg(
+				tea.Key{
+					Type: tea.KeyDown,
+				},
+			)},
+			wantSelected: []int{1},
+		},
+		{
+			name: "down three, multi-select up two",
+			keyMsgs: []tea.KeyMsg{
+				tea.KeyMsg(
+					tea.Key{
+						Type: tea.KeyDown,
+					}),
+				tea.KeyMsg(
+					tea.Key{
+						Type: tea.KeyDown,
+					}),
+				tea.KeyMsg(
+					tea.Key{
+						Type: tea.KeyDown,
+					}),
+				tea.KeyMsg(
+					tea.Key{
+						Type: tea.KeyShiftUp,
+					}),
+				tea.KeyMsg(
+					tea.Key{
+						Type: tea.KeyShiftUp,
+					}),
+			},
+			wantSelected: []int{1, 2, 3},
+		},
+		{
+			name: "down three, multi-select to bottom",
+			keyMsgs: []tea.KeyMsg{
+				tea.KeyMsg(
+					tea.Key{
+						Type: tea.KeyDown,
+					}),
+				tea.KeyMsg(
+					tea.Key{
+						Type: tea.KeyDown,
+					}),
+				tea.KeyMsg(
+					tea.Key{
+						Type: tea.KeyDown,
+					}),
+				tea.KeyMsg(
+					tea.Key{
+						Type: tea.KeyShiftEnd,
+					}),
+			},
+			wantSelected: []int{3, 4, 5, 6},
+		},
+	}
+
+	for _, tc := range testcases {
+		t.Run(tc.name, func(t *testing.T) {
+			table := newTable()
+			for _, msg := range tc.keyMsgs {
+				table, _ = table.Update(msg)
+			}
+			selected := table.SelectedRows()
+			if !reflect.DeepEqual(selected, tc.wantSelected) {
+				t.Errorf("selected rows %v, want %v", selected, tc.wantSelected)
+			}
+		})
+	}
 }
