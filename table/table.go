@@ -1,15 +1,19 @@
 package table
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 )
+
+// TODO: test behaviour regarding setting the height and cursor
+
+// TODO: Set cursor should prefer no shift in the window
 
 // Model defines a state for the table widget.
 type Model struct {
@@ -22,9 +26,10 @@ type Model struct {
 	styles   Styles
 	selected map[int]struct{}
 
-	viewport viewport.Model
-	start    int
-	end      int
+	start  int
+	end    int
+	height int
+	width  int
 }
 
 // Row represents one line in the table.
@@ -131,7 +136,6 @@ func DefaultStyles() Styles {
 // SetStyles sets the table styles.
 func (m *Model) SetStyles(s Styles) {
 	m.styles = s
-	m.UpdateViewport()
 }
 
 // Option is used to set options in New. For example:
@@ -143,13 +147,10 @@ type Option func(*Model)
 func New(opts ...Option) Model {
 	m := Model{
 		cursor:   0,
-		viewport: viewport.New(0, 20),
 		selected: map[int]struct{}{0: {}},
-
-		KeyMap: DefaultKeyMap(),
-		styles: DefaultStyles(),
+		KeyMap:   DefaultKeyMap(),
+		styles:   DefaultStyles(),
 	}
-
 	for _, opt := range opts {
 		opt(&m)
 	}
@@ -157,6 +158,13 @@ func New(opts ...Option) Model {
 	m.UpdateViewport()
 
 	return m
+}
+
+func WithCursor(n int) Option {
+	return func(m *Model) {
+		m.cursor = n
+		m.selected = map[int]struct{}{n: {}}
+	}
 }
 
 // WithColumns sets the table columns (headers).
@@ -176,14 +184,14 @@ func WithRows(rows []Row) Option {
 // WithHeight sets the height of the table.
 func WithHeight(h int) Option {
 	return func(m *Model) {
-		m.viewport.Height = h
+		m.SetHeight(h)
 	}
 }
 
 // WithWidth sets the width of the table.
 func WithWidth(w int) Option {
 	return func(m *Model) {
-		m.viewport.Width = w
+		m.width = w
 	}
 }
 
@@ -222,13 +230,13 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		case key.Matches(msg, m.KeyMap.LineDown):
 			m.MoveDown(1, false)
 		case key.Matches(msg, m.KeyMap.PageUp):
-			m.MoveUp(m.viewport.Height, false)
+			m.MoveUp(m.height, false)
 		case key.Matches(msg, m.KeyMap.PageDown):
-			m.MoveDown(m.viewport.Height, false)
+			m.MoveDown(m.height, false)
 		case key.Matches(msg, m.KeyMap.HalfPageUp):
-			m.MoveUp(m.viewport.Height/2, false)
+			m.MoveUp(m.height/2, false)
 		case key.Matches(msg, m.KeyMap.HalfPageDown):
-			m.MoveDown(m.viewport.Height/2, false)
+			m.MoveDown(m.height/2, false)
 		case key.Matches(msg, m.KeyMap.LineDown):
 			m.MoveDown(1, false)
 		case key.Matches(msg, m.KeyMap.GotoTop):
@@ -258,39 +266,27 @@ func (m Model) Focused() bool {
 // interact.
 func (m *Model) Focus() {
 	m.focus = true
-	m.UpdateViewport()
 }
 
 // Blur blurs the table, preventing selection or movement.
 func (m *Model) Blur() {
 	m.focus = false
-	m.UpdateViewport()
 }
 
 // View renders the component.
 func (m Model) View() string {
-	return m.headersView() + "\n" + m.viewport.View()
-}
 
-// UpdateViewport updates the list content based on the previously defined
-// columns and rows.
-func (m *Model) UpdateViewport() {
-	renderedRows := make([]string, 0, len(m.rows))
-
-	// Render only rows from: m.cursor-m.viewport.Height to: m.cursor+m.viewport.Height
-	// Constant runtime, independent of number of rows in a table.
-	// Limits the number of renderedRows to a maximum of 2*m.viewport.Height
-	if m.cursor >= 0 {
-		m.start = clamp(m.cursor-m.viewport.Height, 0, m.cursor)
-	} else {
-		m.start = 0
+	if m.height == 0 || len(m.rows) == 0 {
+		return m.headersView()
 	}
-	m.end = clamp(m.cursor+m.viewport.Height, m.cursor, len(m.rows))
-	for i := m.start; i < m.end; i++ {
+
+	renderedRows := make([]string, 0, m.height)
+	for i := m.start; i <= m.end; i++ {
 		renderedRows = append(renderedRows, m.renderRow(i))
 	}
-
-	m.viewport.SetContent(
+	return lipgloss.JoinVertical(
+		lipgloss.Center,
+		m.headersView(),
 		lipgloss.JoinVertical(lipgloss.Left, renderedRows...),
 	)
 }
@@ -319,29 +315,92 @@ func (m *Model) SetRows(r []Row) {
 // SetColumns sets a new columns state.
 func (m *Model) SetColumns(c []Column) {
 	m.cols = c
-	m.UpdateViewport()
 }
 
 // SetWidth sets the width of the viewport of the table.
 func (m *Model) SetWidth(w int) {
-	m.viewport.Width = w
-	m.UpdateViewport()
+	m.width = w
 }
 
-// SetHeight sets the height of the viewport of the table.
+func (m *Model) SetSelected(idxs []int) error {
+	for _, idx := range idxs {
+		if idx < 0 || idx >= len(m.rows)-1 {
+			return fmt.Errorf("index out of bounds: %d", idx)
+		}
+		m.selected[idx] = struct{}{}
+	}
+	return nil
+}
+
+// SetHeight sets the number of rows that will be displayed.
+// If height is set to zero, the table will become unresponsive (blurred)
+// because the user would not be able to see what is happening with the table.
 func (m *Model) SetHeight(h int) {
-	m.viewport.Height = h
+	grow := h - m.height
+	// height is the number of rows showing so it is "1 indexed"
+	m.height = clamp(h, 0, len(m.rows))
+	switch {
+	//no op
+	case grow == 0:
+		return
+	// show no rows and blur the table
+	case m.height == 0:
+		m.start = m.cursor
+		m.end = m.cursor
+		m.Blur()
+	// show all rows
+	case m.height == len(m.rows):
+		m.start = 0
+		m.end = len(m.rows) - 1
+		// cursor is at the start, cut or add rows at the bottom
+	case m.cursor == 0:
+		m.start = 0 // start should already be 0, this is for readability
+		m.end = clamp(m.height-1, 0, len(m.rows)-1)
+	// cursor is at the end, cut or add rows at the top
+	case m.cursor == len(m.rows)-1:
+		m.end = len(m.rows) - 1 // end should already be at last value, this is for readability
+		m.start = clamp(m.end-m.height+1, 0, len(m.rows)-1)
+
+	// grow as much down as possible and then add above if needed
+	case grow > 0:
+		m.end = clamp(m.start+m.height-1, m.start, len(m.rows)-1)
+		m.start = clamp(m.end-m.height+1, 0, m.end)
+
+	// remove from end until reaching the cursor, then remove from the top
+	case grow < 0:
+		if m.end+grow <= m.cursor {
+			m.end = m.cursor
+		} else {
+			m.end = m.end + grow
+		}
+		m.start = clamp(m.end-m.height+1, 0, len(m.rows)-1)
+
+		// cursor is in the middle, and the new height change is a shrink but it won't cut off the current cursor position,
+		// so cut rows from the bottom.
+		// case m.cursor <= m.start+m.height-1 && grow < 0:
+		// 	m.end = clamp(m.start+m.height-1, m.start, len(m.rows)-1)
+
+		// // cursor is in the middle and will be cut off by the height change cut rows from both sides to center the cursor
+		// default:
+		// 	startPosition := (m.cursor - m.height/2)
+		// 	m.start = clamp(startPosition, 0, len(m.rows)-1)
+		// 	m.end = clamp(m.start+m.height-1, m.start, len(m.rows)-1)
+		// 	if m.end-m.start+1 != m.height {
+		// 		// clean up rounding errors
+		// 		m.start = clamp(m.end-m.height+1, 0, len(m.rows)-1)
+		// 	}
+	}
 	m.UpdateViewport()
 }
 
 // Height returns the viewport height of the table.
 func (m Model) Height() int {
-	return m.viewport.Height
+	return m.height
 }
 
 // Width returns the viewport width of the table.
 func (m Model) Width() int {
-	return m.viewport.Width
+	return m.width
 }
 
 // Cursor returns the index of the selected row.
@@ -350,6 +409,7 @@ func (m Model) Cursor() int {
 }
 
 // SetCursor sets the cursor position in the table.
+// If you only want one item selected, call ClearSelected before this method.
 func (m *Model) SetCursor(n int) {
 	m.cursor = clamp(n, 0, len(m.rows)-1)
 	m.UpdateViewport()
@@ -395,18 +455,28 @@ func (m *Model) manageSelected(n int, multi bool, down bool) {
 	m.selected[m.cursor] = struct{}{}
 }
 
+// UpdateViewport updates the list content based on the previously defined
+// columns and rows.
+func (m *Model) UpdateViewport() {
+	switch {
+	case m.height == 0:
+		m.start = m.cursor
+		m.end = m.cursor
+	case m.start <= m.cursor && m.cursor <= m.end:
+		// do nothing
+	case m.cursor > m.end:
+		m.end = m.cursor
+		m.start = m.end - m.height + 1
+	case m.cursor < m.start:
+		m.start = m.cursor
+		m.end = m.start + m.height - 1
+	}
+}
+
 // MoveUp moves the selection up by any number of rows.
 // It can not go above the first row.
 func (m *Model) MoveUp(n int, multi bool) {
 	m.manageSelected(n, multi, false)
-	switch {
-	case m.start == 0:
-		m.viewport.SetYOffset(clamp(m.viewport.YOffset, 0, m.cursor))
-	case m.start < m.viewport.Height:
-		m.viewport.SetYOffset(clamp(m.viewport.YOffset+n, 0, m.cursor))
-	case m.viewport.YOffset >= 1:
-		m.viewport.YOffset = clamp(m.viewport.YOffset+n, 1, m.viewport.Height)
-	}
 	m.UpdateViewport()
 }
 
@@ -414,18 +484,7 @@ func (m *Model) MoveUp(n int, multi bool) {
 // It can not go below the last row.
 func (m *Model) MoveDown(n int, multi bool) {
 	m.manageSelected(n, multi, true)
-
-	m.UpdateViewport() // I moved this lower in this function. it was placed after the clamp, which differed from MoveUp
-
-	switch {
-	case m.end == len(m.rows):
-		m.viewport.SetYOffset(clamp(m.viewport.YOffset-n, 1, m.viewport.Height))
-	case m.cursor > (m.end-m.start)/2:
-		m.viewport.SetYOffset(clamp(m.viewport.YOffset-n, 1, m.cursor))
-	case m.viewport.YOffset > 1:
-	case m.cursor > m.viewport.YOffset+m.viewport.Height-1:
-		m.viewport.SetYOffset(clamp(m.viewport.YOffset+1, 0, 1))
-	}
+	m.UpdateViewport()
 }
 
 func (m *Model) MultiSelectToTop() {
@@ -433,7 +492,6 @@ func (m *Model) MultiSelectToTop() {
 		m.selected[i] = struct{}{}
 	}
 	m.SetCursor(0)
-	m.viewport.SetYOffset(clamp(m.viewport.YOffset, 0, m.cursor))
 	m.UpdateViewport()
 }
 
@@ -442,7 +500,6 @@ func (m *Model) MultiSelectToBottom() {
 		m.selected[i] = struct{}{}
 	}
 	m.SetCursor(len(m.rows) - 1)
-	m.viewport.SetYOffset(clamp(m.viewport.YOffset+1, 0, 1))
 	m.UpdateViewport()
 }
 

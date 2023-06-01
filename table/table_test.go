@@ -1,11 +1,15 @@
 package table
 
 import (
+	"math/rand"
 	"reflect"
+	"strconv"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+// https://github.com/calyptia/go-bubble-table/blob/main/table_test.go
 
 func TestFromValues(t *testing.T) {
 	input := "foo1,bar1\nfoo2,bar2\nfoo3,bar3"
@@ -80,8 +84,26 @@ func newTable() Model {
 		WithFocused(true),
 		WithHeight(3),
 	)
-	// t.SetStyles(s)
-	t.SetCursor(0)
+	return t
+}
+
+func newTableLong(length int) Model {
+	columns := []Column{
+		{Title: "Rank", Width: 4},
+		{Title: "City", Width: 10},
+		{Title: "Country", Width: 10},
+		{Title: "Population", Width: 10},
+	}
+	rows := make([]Row, 0, length)
+	for i := 0; i < length; i++ {
+		rows = append(rows, Row{strconv.Itoa(i), "", "", ""})
+	}
+	t := New(
+		WithColumns(columns),
+		WithRows(rows),
+		WithFocused(true),
+		WithHeight(3),
+	)
 	return t
 }
 
@@ -188,6 +210,68 @@ func TestNav(t *testing.T) {
 			},
 			wantSelected: []int{2, 3},
 		},
+		{
+			name: "multi-select to top",
+			keyMsgs: []tea.KeyMsg{
+				tea.KeyMsg(
+					tea.Key{
+						Type: tea.KeyEnd,
+					}),
+				tea.KeyMsg(
+					tea.Key{
+						Type: tea.KeyUp,
+					}),
+				tea.KeyMsg(
+					tea.Key{
+						Type: tea.KeyShiftHome,
+					}),
+			},
+			wantSelected: []int{0, 1, 2, 3, 4, 5},
+		},
+		{
+			name: "go to top",
+			keyMsgs: []tea.KeyMsg{
+				tea.KeyMsg(
+					tea.Key{
+						Type: tea.KeyDown,
+					}),
+				tea.KeyMsg(
+					tea.Key{
+						Type: tea.KeyDown,
+					}),
+				tea.KeyMsg(
+					tea.Key{
+						Type: tea.KeyHome,
+					}),
+			},
+			wantSelected: []int{0},
+		},
+		{
+			name: "multi-select to top, then try multi-selecting up",
+			keyMsgs: []tea.KeyMsg{
+				tea.KeyMsg(
+					tea.Key{
+						Type: tea.KeyDown,
+					}),
+				tea.KeyMsg(
+					tea.Key{
+						Type: tea.KeyDown,
+					}),
+				tea.KeyMsg(
+					tea.Key{
+						Type: tea.KeyShiftUp,
+					}),
+				tea.KeyMsg(
+					tea.Key{
+						Type: tea.KeyShiftUp,
+					}),
+				tea.KeyMsg(
+					tea.Key{
+						Type: tea.KeyShiftUp,
+					}),
+			},
+			wantSelected: []int{0, 1, 2},
+		},
 	}
 
 	for _, tc := range testcases {
@@ -201,5 +285,98 @@ func TestNav(t *testing.T) {
 				t.Errorf("selected rows %v, want %v", selected, tc.wantSelected)
 			}
 		})
+	}
+}
+
+// Pseudo fuzzing
+func TestWindowingSetCursor(t *testing.T) {
+	t.Parallel()
+	table := newTable()
+	for i := 0; i < 1000; i++ {
+		table.SetCursor(rand.Intn(10))
+		if table.end-table.start != table.Height()-1 {
+			t.Error("height", table.end, table.start, table.Height())
+		}
+	}
+}
+
+func TestWindowingHeight(t *testing.T) {
+	t.Parallel()
+	table := newTable()
+	for i := 0; i < 1000; i++ {
+		// alter the table
+		n := rand.Intn(10)
+		table.SetHeight(n)
+
+		// check the table
+		if table.Cursor() != clamp(table.Cursor(), table.start, table.end) {
+			t.Errorf("cursor %d, start %d, end %d", table.Cursor(), table.start, table.end)
+		}
+		if table.Height() == 0 {
+			if table.end-table.start != 0 {
+				t.Error("height:", table.Height(), "end:", table.end, "start:", table.start, "n:", n)
+			}
+			continue
+		}
+		if table.end-table.start+1 != table.Height() {
+			t.Error("height:", table.Height(), "end:", table.end, "start:", table.start, "n:", n)
+		}
+	}
+}
+
+func TestWindowingCursorAndHeight(t *testing.T) {
+	t.Parallel()
+	tableLength := 10
+	table := newTableLong(tableLength)
+	for i := 0; i < 1000; i++ {
+
+		preHeight := table.Height()
+		preStart := table.start
+		preEnd := table.end
+		preCursor := table.Cursor()
+
+		r := rand.Intn(tableLength * 2)
+		if rand.Intn(2)%2 == 0 {
+			r = -r
+		}
+
+		if rand.Intn(2)%2 == 0 {
+			table.SetHeight(r)
+		}
+		if rand.Intn(2)%2 == 0 {
+			table.SetCursor(rand.Intn(tableLength * 2))
+		}
+
+		if i == 17 {
+			table.SetCursor(tableLength)
+		}
+
+		// check the table
+		if table.Cursor() != clamp(table.Cursor(), table.start, table.end) {
+			t.Errorf("cursor %d, start %d, end %d", table.Cursor(), table.start, table.end)
+		}
+
+		if table.Height() == 0 {
+			if table.end-table.start != 0 {
+				t.Error("height:", table.Height(), "end:", table.end, "start:", table.start)
+			}
+			continue
+		}
+		if table.end-table.start != table.Height()-1 {
+			t.Error("Length Error PRE ", "height:", preHeight, "start:", preStart, "end:", preEnd, "cursor:", preCursor)
+			t.Error("Length Error POST", "height:", table.Height(), "start:", table.start, "end:", table.end, "cursor:", table.Cursor())
+			t.Error("----------------------------")
+			t.Fatal()
+		}
+		if table.Cursor() >= tableLength {
+			t.Error("Cursor Error", "height:", table.Height(), "start:", table.start, "end:", table.end, "cursor:", table.Cursor())
+		}
+		if table.end >= tableLength {
+			t.Error("height:", table.Height(), "end:", table.end, "start:", table.start, "cursor:", table.Cursor())
+		}
+		if table.start < 0 {
+			t.Error("Start is less than 0", "height:", table.Height(), "end:", table.end, "start:", table.start, "cursor:", table.Cursor())
+		}
+		table.View()
 	}
 }
