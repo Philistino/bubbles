@@ -340,55 +340,21 @@ func (m *Model) SetHeight(h int) {
 	// height is the number of rows showing so it is "1 indexed"
 	m.height = clamp(h, 0, len(m.rows))
 	switch {
-	//no op
 	case grow == 0:
+		//no op
 		return
-	// show no rows and blur the table
-	case m.height == 0:
-		m.start = m.cursor
-		m.end = m.cursor
-		m.Blur()
-	// show all rows
-	case m.height == len(m.rows):
-		m.start = 0
-		m.end = len(m.rows) - 1
-		// cursor is at the start, cut or add rows at the bottom
-	case m.cursor == 0:
-		m.start = 0 // start should already be 0, this is for readability
-		m.end = clamp(m.height-1, 0, len(m.rows)-1)
-	// cursor is at the end, cut or add rows at the top
-	case m.cursor == len(m.rows)-1:
-		m.end = len(m.rows) - 1 // end should already be at last value, this is for readability
-		m.start = clamp(m.end-m.height+1, 0, len(m.rows)-1)
-
-	// grow as much down as possible and then add above if needed
 	case grow > 0:
+		// grow as much down as possible and then add above if needed
 		m.end = clamp(m.start+m.height-1, m.start, len(m.rows)-1)
 		m.start = clamp(m.end-m.height+1, 0, m.end)
-
-	// remove from end until reaching the cursor, then remove from the top
 	case grow < 0:
+		// remove from end until reaching the cursor, then remove from the top
 		if m.end+grow <= m.cursor {
 			m.end = m.cursor
 		} else {
 			m.end = m.end + grow
 		}
 		m.start = clamp(m.end-m.height+1, 0, len(m.rows)-1)
-
-		// cursor is in the middle, and the new height change is a shrink but it won't cut off the current cursor position,
-		// so cut rows from the bottom.
-		// case m.cursor <= m.start+m.height-1 && grow < 0:
-		// 	m.end = clamp(m.start+m.height-1, m.start, len(m.rows)-1)
-
-		// // cursor is in the middle and will be cut off by the height change cut rows from both sides to center the cursor
-		// default:
-		// 	startPosition := (m.cursor - m.height/2)
-		// 	m.start = clamp(startPosition, 0, len(m.rows)-1)
-		// 	m.end = clamp(m.start+m.height-1, m.start, len(m.rows)-1)
-		// 	if m.end-m.start+1 != m.height {
-		// 		// clean up rounding errors
-		// 		m.start = clamp(m.end-m.height+1, 0, len(m.rows)-1)
-		// 	}
 	}
 	m.UpdateViewport()
 }

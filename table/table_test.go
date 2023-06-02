@@ -326,7 +326,7 @@ func TestWindowingHeight(t *testing.T) {
 
 func TestWindowingCursorAndHeight(t *testing.T) {
 	t.Parallel()
-	tableLength := 10
+	tableLength := 101
 	table := newTableLong(tableLength)
 	for i := 0; i < 1000; i++ {
 
@@ -355,28 +355,72 @@ func TestWindowingCursorAndHeight(t *testing.T) {
 		if table.Cursor() != clamp(table.Cursor(), table.start, table.end) {
 			t.Errorf("cursor %d, start %d, end %d", table.Cursor(), table.start, table.end)
 		}
-
+		if table.Cursor() >= tableLength {
+			t.Error("Cursor table length Error", "height:", table.Height(), "start:", table.start, "end:", table.end, "cursor:", table.Cursor())
+		}
+		if table.end >= tableLength {
+			t.Error("table length error", "height:", table.Height(), "end:", table.end, "start:", table.start, "cursor:", table.Cursor())
+		}
+		if table.start < 0 {
+			t.Error("Start is less than 0", "height:", table.Height(), "end:", table.end, "start:", table.start, "cursor:", table.Cursor())
+		}
 		if table.Height() == 0 {
 			if table.end-table.start != 0 {
-				t.Error("height:", table.Height(), "end:", table.end, "start:", table.start)
+				t.Error("Zero height error", "height:", table.Height(), "end:", table.end, "start:", table.start)
 			}
 			continue
 		}
 		if table.end-table.start != table.Height()-1 {
 			t.Error("Length Error PRE ", "height:", preHeight, "start:", preStart, "end:", preEnd, "cursor:", preCursor)
 			t.Error("Length Error POST", "height:", table.Height(), "start:", table.start, "end:", table.end, "cursor:", table.Cursor())
-			t.Error("----------------------------")
 			t.Fatal()
 		}
+		table.View()
+	}
+}
+
+func FuzzHeightCursor(f *testing.F) {
+	testcases := []int{-2, 3, 0, 4}
+	for _, tc := range testcases {
+		f.Add(tc) // Use f.Add to provide a seed corpus
+	}
+	tableLength := 10
+	table := newTableLong(tableLength)
+	f.Fuzz(func(t *testing.T, n int) {
+
+		preHeight := table.Height()
+		preStart := table.start
+		preEnd := table.end
+		preCursor := table.Cursor()
+
+		if rand.Intn(2)%2 == 0 {
+			table.SetHeight(n)
+		} else {
+			table.SetCursor(n)
+		}
+
+		if table.Cursor() != clamp(table.Cursor(), table.start, table.end) {
+			t.Errorf("cursor %d, start %d, end %d", table.Cursor(), table.start, table.end)
+		}
 		if table.Cursor() >= tableLength {
-			t.Error("Cursor Error", "height:", table.Height(), "start:", table.start, "end:", table.end, "cursor:", table.Cursor())
+			t.Error("Cursor table length Error", "height:", table.Height(), "start:", table.start, "end:", table.end, "cursor:", table.Cursor())
 		}
 		if table.end >= tableLength {
-			t.Error("height:", table.Height(), "end:", table.end, "start:", table.start, "cursor:", table.Cursor())
+			t.Error("table length error", "height:", table.Height(), "end:", table.end, "start:", table.start, "cursor:", table.Cursor())
 		}
 		if table.start < 0 {
 			t.Error("Start is less than 0", "height:", table.Height(), "end:", table.end, "start:", table.start, "cursor:", table.Cursor())
 		}
-		table.View()
-	}
+		if table.Height() == 0 {
+			if table.end-table.start != 0 {
+				t.Error("Zero height error", "height:", table.Height(), "end:", table.end, "start:", table.start)
+			}
+			return
+		}
+		if table.end-table.start != table.Height()-1 {
+			t.Error("Length Error PRE ", "height:", preHeight, "start:", preStart, "end:", preEnd, "cursor:", preCursor)
+			t.Error("Length Error POST", "height:", table.Height(), "start:", table.start, "end:", table.end, "cursor:", table.Cursor())
+		}
+
+	})
 }
