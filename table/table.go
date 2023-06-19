@@ -11,10 +11,6 @@ import (
 	"github.com/mattn/go-runewidth"
 )
 
-// TODO: test behaviour regarding setting the height and cursor
-
-// TODO: Set cursor should prefer no shift in the window
-
 // Model defines a state for the table widget.
 type Model struct {
 	KeyMap KeyMap
@@ -294,7 +290,7 @@ func (m Model) View() string {
 // SelectedRows returns the indexes of the selected rows.
 func (m Model) SelectedRows() []int {
 	rows := make([]int, 0, len(m.selected))
-	for k, _ := range m.selected {
+	for k := range m.selected {
 		rows = append(rows, k)
 	}
 	sort.Ints(rows)
@@ -377,6 +373,9 @@ func (m Model) Cursor() int {
 // SetCursor sets the cursor position in the table.
 // If you only want one item selected, call ClearSelected before this method.
 func (m *Model) SetCursor(n int) {
+	if len(m.rows) == 0 {
+		return
+	}
 	m.cursor = clamp(n, 0, len(m.rows)-1)
 	m.UpdateViewport()
 }
