@@ -2,18 +2,22 @@ package table
 
 import (
 	"fmt"
+	"log"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	zone "github.com/lrstanley/bubblezone"
 	"github.com/mattn/go-runewidth"
 )
 
 // Model defines a state for the table widget.
 type Model struct {
-	KeyMap KeyMap
+	KeyMap       KeyMap
+	emptyMessage string
 
 	cols     []Column
 	rows     []Row
@@ -22,14 +26,20 @@ type Model struct {
 	styles   Styles
 	selected map[int]struct{}
 
-	start  int
-	end    int
-	height int
-	width  int
+	start   int
+	end     int
+	height  int
+	width   int
+	zoneMgr *zone.Manager
 }
 
 // Row represents one line in the table.
 type Row []string
+
+// Rower represents one line in the table.
+type Rower interface {
+	Row() []string
+}
 
 // Column defines the table structure.
 type Column struct {
@@ -117,6 +127,7 @@ type Styles struct {
 	Cell     lipgloss.Style
 	Selected lipgloss.Style
 	Cursor   lipgloss.Style
+	Wrapper  lipgloss.Style
 }
 
 // DefaultStyles returns a set of default style definitions for this table.
@@ -126,6 +137,9 @@ func DefaultStyles() Styles {
 		Header:   lipgloss.NewStyle().Bold(true).Padding(0, 1),
 		Cell:     lipgloss.NewStyle().Padding(0, 1),
 		Cursor:   lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212")),
+		Wrapper: lipgloss.NewStyle().
+			BorderStyle(lipgloss.NormalBorder()).
+			BorderForeground(lipgloss.Color("240")),
 	}
 }
 
@@ -146,6 +160,7 @@ func New(opts ...Option) Model {
 		selected: map[int]struct{}{0: {}},
 		KeyMap:   DefaultKeyMap(),
 		styles:   DefaultStyles(),
+		zoneMgr:  zone.New(),
 	}
 	for _, opt := range opts {
 		opt(&m)
@@ -160,6 +175,16 @@ func WithCursor(n int) Option {
 	return func(m *Model) {
 		m.cursor = n
 		m.selected = map[int]struct{}{n: {}}
+	}
+}
+
+// WithEmptyMessage sets the message to display when the table has no rows.
+// For example:
+//
+//	table := New(WithEmptyMessage("No results found"))
+func WithEmptyMessage(text string) Option {
+	return func(m *Model) {
+		m.emptyMessage = text
 	}
 }
 
@@ -248,6 +273,33 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		case key.Matches(msg, m.KeyMap.MultiSelectToBottom):
 			m.MultiSelectToBottom()
 		}
+	case tea.MouseMsg:
+		if msg.Type != tea.MouseLeft {
+			return m, nil
+		}
+		for i, col := range m.cols {
+			if m.zoneMgr.Get("col" + strconv.Itoa(i)).InBounds(msg) {
+				log.Println("Clicked on column", col.Title)
+				// m.sortBy = col.Title
+				// m.sortAsc = !m.sortAsc
+				// m.Sort()
+			}
+		}
+
+		for i := m.start; i <= m.end; i++ {
+			if m.zoneMgr.Get(strconv.Itoa(i)).InBounds(msg) {
+				if msg.Ctrl {
+					m.SetCursor(i)
+					m.ToggleSelected(i)
+					// log.Println("in bounds + ctrl", i, m.rows[i])
+				} else {
+					// log.Println("in bounds", i, m.rows[i])
+					m.ClearSelected()
+					m.SetCursor(i)
+
+				}
+			}
+		}
 	}
 
 	return m, nil
@@ -272,19 +324,32 @@ func (m *Model) Blur() {
 // View renders the component.
 func (m Model) View() string {
 
-	if m.height == 0 || len(m.rows) == 0 {
-		return m.headersView()
+	if len(m.rows) == 0 {
+		view := m.styles.Wrapper.Render(lipgloss.JoinVertical(
+			lipgloss.Center,
+			m.headersView(),
+			lipgloss.Place(m.width, 1, lipgloss.Top, lipgloss.Center, m.emptyMessage),
+		))
+		if m.zoneMgr != nil {
+			view = m.zoneMgr.Scan(view)
+		}
+		return view
 	}
 
 	renderedRows := make([]string, 0, m.height)
 	for i := m.start; i <= m.end; i++ {
 		renderedRows = append(renderedRows, m.renderRow(i))
 	}
-	return lipgloss.JoinVertical(
+
+	view := m.styles.Wrapper.Render(lipgloss.JoinVertical(
 		lipgloss.Center,
 		m.headersView(),
 		lipgloss.JoinVertical(lipgloss.Left, renderedRows...),
-	)
+	))
+	if m.zoneMgr != nil {
+		view = m.zoneMgr.Scan(view)
+	}
+	return view
 }
 
 // SelectedRows returns the indexes of the selected rows.
@@ -328,13 +393,36 @@ func (m *Model) SetSelected(idxs []int) error {
 	return nil
 }
 
+// SetCursor adds the given index to the selected rows.
+func (m *Model) SetIsSelected(idx int) error {
+	if idx < 0 || idx >= len(m.rows)-1 {
+		return fmt.Errorf("index out of bounds: %d", idx)
+	}
+	m.selected[idx] = struct{}{}
+	return nil
+}
+
+func (m *Model) ToggleSelected(idx int) error {
+	if idx < 0 || idx >= len(m.rows)-1 {
+		return fmt.Errorf("index out of bounds: %d", idx)
+	}
+	if _, ok := m.selected[idx]; ok {
+		delete(m.selected, idx)
+	} else {
+		m.selected[idx] = struct{}{}
+	}
+	return nil
+}
+
 // SetHeight sets the number of rows that will be displayed.
 // If height is set to zero, the table will become unresponsive (blurred)
 // because the user would not be able to see what is happening with the table.
 func (m *Model) SetHeight(h int) {
-	grow := h - m.height
+	m.styles.Wrapper = m.styles.Wrapper.Height(h - m.styles.Wrapper.GetVerticalFrameSize())
+	rowHeight := h - lipgloss.Height(m.headersView()) - m.styles.Wrapper.GetVerticalFrameSize()
+	grow := rowHeight - m.height
 	// height is the number of rows showing so it is "1 indexed"
-	m.height = clamp(h, 0, len(m.rows))
+	m.height = clamp(rowHeight, 0, len(m.rows))
 	switch {
 	case grow == 0:
 		//no op
@@ -377,6 +465,7 @@ func (m *Model) SetCursor(n int) {
 		return
 	}
 	m.cursor = clamp(n, 0, len(m.rows)-1)
+	m.selected[m.cursor] = struct{}{}
 	m.UpdateViewport()
 }
 
@@ -496,10 +585,14 @@ func (m *Model) FromValues(value, separator string) {
 
 func (m Model) headersView() string {
 	var s = make([]string, 0, len(m.cols))
-	for _, col := range m.cols {
+	for i, col := range m.cols {
 		style := lipgloss.NewStyle().Width(col.Width).MaxWidth(col.Width).Inline(true)
 		renderedCell := style.Render(runewidth.Truncate(col.Title, col.Width, "…"))
-		s = append(s, m.styles.Header.Render(renderedCell))
+		renderedCell = m.styles.Header.Render(renderedCell)
+		if m.zoneMgr != nil {
+			renderedCell = m.zoneMgr.Mark("col"+strconv.Itoa(i), renderedCell)
+		}
+		s = append(s, renderedCell)
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Left, s...)
 }
@@ -514,13 +607,17 @@ func (m *Model) renderRow(rowID int) string {
 
 	row := lipgloss.JoinHorizontal(lipgloss.Left, s...)
 
-	if rowID == m.cursor {
-		return m.styles.Cursor.Render(row)
+	_, selected := m.selected[rowID]
+	switch {
+	case rowID == m.cursor:
+		row = m.styles.Cursor.Render(row)
+	case selected:
+		row = m.styles.Selected.Render(row)
+	default:
 	}
 
-	_, ok := m.selected[rowID]
-	if ok {
-		return m.styles.Selected.Render(row)
+	if m.zoneMgr != nil {
+		row = m.zoneMgr.Mark(strconv.Itoa(rowID), row)
 	}
 
 	return row

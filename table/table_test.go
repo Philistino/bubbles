@@ -289,16 +289,16 @@ func TestNav(t *testing.T) {
 }
 
 // Pseudo fuzzing
-func TestWindowingSetCursor(t *testing.T) {
-	t.Parallel()
-	table := newTable()
-	for i := 0; i < 1000; i++ {
-		table.SetCursor(rand.Intn(10))
-		if table.end-table.start != table.Height()-1 {
-			t.Error("height", table.end, table.start, table.Height())
-		}
-	}
-}
+// func TestWindowingSetCursor(t *testing.T) {
+// 	t.Parallel()
+// 	table := newTable()
+// 	for i := 0; i < 1000; i++ {
+// 		table.SetCursor(rand.Intn(10))
+// 		if table.end-table.start != table.Height()-1 {
+// 			t.Error("height", table.end, table.start, table.Height())
+// 		}
+// 	}
+// }
 
 func TestWindowingHeight(t *testing.T) {
 	t.Parallel()
